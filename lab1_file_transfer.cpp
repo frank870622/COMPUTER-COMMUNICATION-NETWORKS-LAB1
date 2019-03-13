@@ -113,14 +113,14 @@ void tcp_recv(char *ip, int port)
     if (n <= 0)
         printf("recv: error receive data size");
 
-    int datasize = atoi(sizebuffer);
+    int filesize = atoi(sizebuffer);
 
-    char databuffer[datasize];
-    bzero(databuffer, datasize);
+    char recvbuffer[filesize];
+    bzero(recvbuffer, filesize);
 
     //ask sender to send data and read it
     n = write(sockfd, "give me the file", strlen("give me the file"));
-    n = read(sockfd, databuffer, datasize);
+    n = read(sockfd, recvbuffer, filesize);
     if (n <= 0)
         printf("recv: error receive data size");
 
@@ -133,7 +133,7 @@ void tcp_recv(char *ip, int port)
     {
         cout << "Error creating destination file\n";
     }
-    n = write(to, databuffer, datasize); //write data to the new file
+    n = write(to, recvbuffer, filesize); //write data to the new file
 
     /*
     printf("Please enter the message: ");
@@ -176,14 +176,15 @@ void tcp_send(char *ip, int port, char *filename)
     if (newsockfd < 0)
         error("ERROR on accept");
 
-    FILE *File = fopen(filename, "rb");
-
     //receive buffer
     char recvbuffer[256];
     bzero(recvbuffer, 256);
 
     //read data from receiver
     n = read(newsockfd, recvbuffer, 255);
+
+    //open file
+    FILE *File = fopen(filename, "rb");
 
     //get datasize
     fseek(File, 0, SEEK_END);
@@ -245,6 +246,35 @@ void udp_recv(char *ip, int port)
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(ip);
+
+    //ask sender to send file size
+    sendto(sock, "give me the file size", strlen("give me the file size"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
+    //receive the file size from sender
+    char sizebuffer[256];
+    memset(sizebuffer, 0, 256);
+    int n = recvfrom(sock, sizebuffer, sizeof(sizebuffer), 0, NULL, NULL);
+    int filesize = atoi(sizebuffer);
+
+    //ask sender to send file
+    sendto(sock, "give me the file", strlen("give me the file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
+    //create the buffer to get file
+    char recvbuffer[filesize];
+    memset(recvbuffer, 0, filesize);
+    n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0, NULL, NULL);
+
+    //sent "i got the file" to sender
+    n = sendto(sock, "i got the file", strlen("i got the file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
+    //create a new file to store
+    int to = creat("output.txt", 0777);
+    if (to < 0)
+    {
+        cout << "Error creating destination file\n";
+    }
+    n = write(to, recvbuffer, filesize); //write data to the new file
+
     /*
     int ret;
     char sendbuf[1024] = {0};
@@ -254,7 +284,7 @@ void udp_recv(char *ip, int port)
 
         sendto(sock, sendbuf, strlen(sendbuf), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
-        ret = recvfrom(sock, recvbuf, sizeof(recvbuf), 0, NULL, NULL);
+        
         if (ret == -1)
         {
             if (errno == EINTR)
@@ -267,6 +297,7 @@ void udp_recv(char *ip, int port)
         memset(recvbuf, 0, sizeof(recvbuf));
     }
     */
+    close(to);
     close(sock);
 }
 void udp_send(char *ip, int port, char *filename)
@@ -285,16 +316,58 @@ void udp_send(char *ip, int port, char *filename)
         ERR_EXIT("bind error");
 
     char recvbuf[1024] = {0};
+    char sizebuffer[256] = {0};
     struct sockaddr_in peeraddr;
     socklen_t peerlen;
     int n;
 
-    while (1)
-    {
+    //open file
+    FILE *File = fopen(filename, "rb");
 
-        peerlen = sizeof(peeraddr);
-        memset(recvbuf, 0, sizeof(recvbuf));
-        /*
+    //get filesize
+    fseek(File, 0, SEEK_END);
+    int datasize = ftell(File);
+    fseek(File, 0, SEEK_SET);
+    //store filesize
+    memset(sizebuffer, 0, sizeof(sizebuffer));
+    sprintf(sizebuffer, "%d", datasize);
+
+    //read file to sendbuffer
+    char sendbuffer[datasize];
+    memset(sendbuffer, 0, datasize);
+    n = fread(sendbuffer, 1, datasize, File);
+    if (n <= 0)
+    {
+        printf("error read file\n");
+    }
+
+    peerlen = sizeof(peeraddr);
+    memset(recvbuf, 0, sizeof(recvbuf));
+
+    //receive the file ask from receiver
+    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+                 (struct sockaddr *)&peeraddr, &peerlen);
+
+    //send file size to receiver
+    n = sendto(sock, sizebuffer, sizeof(sizebuffer), 0,
+               (struct sockaddr *)&peeraddr, peerlen);
+    printf("udp send filesize to receiver\n");
+
+    //receive the reply from receiver
+    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+                 (struct sockaddr *)&peeraddr, &peerlen);
+
+    //send file to receiver
+    n = sendto(sock, sendbuffer, sizeof(sendbuffer), 0,
+               (struct sockaddr *)&peeraddr, peerlen);
+    printf("udp send file to receiver\n");
+
+    //receiver the reply from receiver
+    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+                 (struct sockaddr *)&peeraddr, &peerlen);
+
+    printf("udp send file is over\n");
+    /*
         n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
                      (struct sockaddr *)&peeraddr, &peerlen);
         if (n == -1)
@@ -313,6 +386,7 @@ void udp_send(char *ip, int port, char *filename)
                    (struct sockaddr *)&peeraddr, peerlen);
         }
         */
-    }
+
+    fclose(File);
     close(sock);
 }
