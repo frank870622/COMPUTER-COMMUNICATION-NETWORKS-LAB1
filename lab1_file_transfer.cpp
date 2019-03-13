@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -23,10 +24,10 @@ void error(const char *msg)
     exit(0);
 }
 
-void tcp_send(char *, int, string);
 void tcp_recv(char *, int);
-void udp_send(char *, int, string);
+void tcp_send(char *, int, char *);
 void udp_recv(char *, int);
+void udp_send(char *, int, char *);
 
 int main(int argc, char *argv[])
 {
@@ -77,13 +78,12 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-void tcp_send(char *ip, int port, string filename)
+void tcp_recv(char *ip, int port)
 {
     int sockfd, portno, n;
     struct sockaddr_in serv_addr;
     struct hostent *server;
 
-    char buffer[256];
     portno = port;
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
@@ -102,10 +102,44 @@ void tcp_send(char *ip, int port, string filename)
     serv_addr.sin_port = htons(portno);
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         error("ERROR connecting");
+
+    // this array to store data size
+    char sizebuffer[128];
+    bzero(sizebuffer, 128);
+
+    //ask sender to send data size and read it
+    n = write(sockfd, "give me the file size", strlen("give me the file size"));
+    n = read(sockfd, sizebuffer, 128);
+    if (n <= 0)
+        printf("recv: error receive data size");
+
+    int datasize = atoi(sizebuffer);
+
+    char databuffer[datasize];
+    bzero(databuffer, datasize);
+
+    //ask sender to send data and read it
+    n = write(sockfd, "give me the file", strlen("give me the file"));
+    n = read(sockfd, databuffer, datasize);
+    if (n <= 0)
+        printf("recv: error receive data size");
+
+    //reply to sender "i get the file"
+    n = write(sockfd, "i get the file", strlen("i get the file"));
+
+    //create a new file to store
+    int to = creat("output.txt", 0777);
+    if (to < 0)
+    {
+        cout << "Error creating destination file\n";
+    }
+    n = write(to, databuffer, datasize); //write data to the new file
+
+    /*
     printf("Please enter the message: ");
     bzero(buffer, 256);
     fgets(buffer, 255, stdin);
-    n = write(sockfd, buffer, strlen(buffer));
+    
     if (n < 0)
         error("ERROR writing to socket");
     bzero(buffer, 256);
@@ -113,13 +147,14 @@ void tcp_send(char *ip, int port, string filename)
     if (n < 0)
         error("ERROR reading from socket");
     printf("%s\n", buffer);
+    */
+    close(to);
     close(sockfd);
 }
-void tcp_recv(char *ip, int port)
+void tcp_send(char *ip, int port, char *filename)
 {
     int sockfd, newsockfd, portno;
     socklen_t clilen;
-    char buffer[256];
     struct sockaddr_in serv_addr, cli_addr;
     int n;
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -140,18 +175,66 @@ void tcp_recv(char *ip, int port)
                        &clilen);
     if (newsockfd < 0)
         error("ERROR on accept");
+
+    FILE *File = fopen(filename, "rb");
+
+    //receive buffer
+    char recvbuffer[256];
+    bzero(recvbuffer, 256);
+
+    //read data from receiver
+    n = read(newsockfd, recvbuffer, 255);
+
+    //get datasize
+    fseek(File, 0, SEEK_END);
+    int datasize = ftell(File);
+    fseek(File, 0, SEEK_SET);
+
+    //array to store file
+    char sendbuffer[datasize];
+    bzero(sendbuffer, datasize);
+    n = fread(sendbuffer, 1, datasize, File);
+    if (n <= 0)
+    {
+        printf("error read file\n");
+    }
+
+    //array to sastoreve data size
+    char sizebuffer[128];
+    bzero(sizebuffer, 128);
+
+    //send data size to receiver
+    sprintf(sizebuffer, "%d", datasize);
+    n = write(newsockfd, sizebuffer, strlen(sizebuffer));
+    if (n <= 0)
+    {
+        printf("error send datasize\n");
+    }
+
+    //read data from receiver
+    n = read(newsockfd, recvbuffer, 255);
+
+    //send file to receiver
+    n = write(newsockfd, sendbuffer, datasize);
+
+    //receive reply from receiver "i get the file"
+    n = read(newsockfd, recvbuffer, 255);
+    printf("TCP data transfer is over");
+    /*
     bzero(buffer, 256);
-    n = read(newsockfd, buffer, 255);
+    
     if (n < 0)
         error("ERROR reading from socket");
     printf("Here is the message: %s\n", buffer);
     n = write(newsockfd, "I got your message", 18);
     if (n < 0)
         error("ERROR writing to socket");
+    */
+    fclose(File);
     close(newsockfd);
     close(sockfd);
 }
-void udp_send(char *ip, int port, string filename)
+void udp_recv(char *ip, int port)
 {
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
@@ -162,7 +245,7 @@ void udp_send(char *ip, int port, string filename)
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(ip);
-
+    /*
     int ret;
     char sendbuf[1024] = {0};
     char recvbuf[1024] = {0};
@@ -183,10 +266,10 @@ void udp_send(char *ip, int port, string filename)
         memset(sendbuf, 0, sizeof(sendbuf));
         memset(recvbuf, 0, sizeof(recvbuf));
     }
-
+    */
     close(sock);
 }
-void udp_recv(char *ip, int port)
+void udp_send(char *ip, int port, char *filename)
 {
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
@@ -211,6 +294,7 @@ void udp_recv(char *ip, int port)
 
         peerlen = sizeof(peeraddr);
         memset(recvbuf, 0, sizeof(recvbuf));
+        /*
         n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
                      (struct sockaddr *)&peeraddr, &peerlen);
         if (n == -1)
@@ -228,6 +312,7 @@ void udp_recv(char *ip, int port)
             sendto(sock, recvbuf, n, 0,
                    (struct sockaddr *)&peeraddr, peerlen);
         }
+        */
     }
     close(sock);
 }
