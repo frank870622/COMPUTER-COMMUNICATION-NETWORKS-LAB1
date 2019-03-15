@@ -4,10 +4,13 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <time.h>
 #include <iostream>
 using namespace std;
 
@@ -31,13 +34,6 @@ void udp_send(char *, int, char *);
 
 int main(int argc, char *argv[])
 {
-    /*
-    //send error when input parameter number < 5
-    if (argc < 5) {
-       fprintf(stderr,"usage %s hostname port\n", argv[0]);
-       exit(0);
-    }
-    */
     string protocal = argv[1]; //tcp or udp
     string type = argv[2];     //send or recv
 
@@ -80,95 +76,140 @@ int main(int argc, char *argv[])
 
 void tcp_recv(char *ip, int port)
 {
+    //TCP receiver to ask sender to send file
     int sockfd, portno, n;
     struct sockaddr_in serv_addr;
     struct hostent *server;
 
-    portno = port;
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    portno = port;                            //port number
+    sockfd = socket(AF_INET, SOCK_STREAM, 0); //initail socket
     if (sockfd < 0)
         error("ERROR opening socket");
-    server = gethostbyname(ip);
+
+    server = gethostbyname(ip); //get the input ip address
     if (server == NULL)
     {
         fprintf(stderr, "ERROR, no such host\n");
         exit(0);
     }
+
     bzero((char *)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     bcopy((char *)server->h_addr,
           (char *)&serv_addr.sin_addr.s_addr,
           server->h_length);
     serv_addr.sin_port = htons(portno);
+
+    //connect TCP
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         error("ERROR connecting");
 
-    // this array to store data size
+    //timer declare
+    time_t rawtime;
+    struct tm *timeinfo;
+
+    // this array to receive data size
     char sizebuffer[128];
     bzero(sizebuffer, 128);
 
-    //ask sender to send data size and read it
+    //this array to receive file name
+    char namebuffer[128];
+    memset(namebuffer, 0, 128);
+
+    //this array to store file name without directory name
+    char filename[128];
+    memset(filename, 0, 128);
+
+    //this array to receive file data
+    char recvbuffer[1024];
+    memset(recvbuffer, 0, 1024);
+
+    int filesize;          //a integer to store the entire file size
+    int nowrecvsize = 0;   //a integer to store the received file size
+    float nowsendpart = 0; //a integer to store the sended % of file
+
+    //create output directory
+    mkdir("output", 0777);
+
+    //ask sender to send file name
+    n = write(sockfd, "give me the file name", strlen("give me the file name"));
+
+    //receive the file name
+    n = read(sockfd, namebuffer, 128);
+
+    //ask sender to send file size
     n = write(sockfd, "give me the file size", strlen("give me the file size"));
+
+    //receive file size
     n = read(sockfd, sizebuffer, 128);
     if (n <= 0)
         printf("recv: error receive data size");
+    filesize = atoi(sizebuffer); //store file size into local integer
 
-    int filesize = atoi(sizebuffer);
-
-    char recvbuffer[filesize];
-    bzero(recvbuffer, filesize);
-
-    //ask sender to send data and read it
+    //ask sender to send file data
     n = write(sockfd, "give me the file", strlen("give me the file"));
-    n = read(sockfd, recvbuffer, filesize);
-    if (n <= 0)
-        printf("recv: error receive data size");
-
-    //reply to sender "i get the file"
-    n = write(sockfd, "i get the file", strlen("i get the file"));
 
     //create a new file to store
-    int to = creat("output.txt", 0777);
+    sprintf(filename, "output/%s", strrchr(namebuffer, '/') == nullptr ? namebuffer : strrchr(namebuffer, '/') + 1);
+    int to = creat(filename, 0777); //create file at output/filename
     if (to < 0)
     {
         cout << "Error creating destination file\n";
     }
-    n = write(to, recvbuffer, filesize); //write data to the new file
 
-    /*
-    printf("Please enter the message: ");
-    bzero(buffer, 256);
-    fgets(buffer, 255, stdin);
-    
-    if (n < 0)
-        error("ERROR writing to socket");
-    bzero(buffer, 256);
-    n = read(sockfd, buffer, 255);
-    if (n < 0)
-        error("ERROR reading from socket");
-    printf("%s\n", buffer);
-    */
+    //receive the file data
+    while (nowrecvsize < filesize) //received file size < entire file size, it means the transport not finish
+    {
+        //every 5 % send system time
+        if ((float)nowrecvsize / (float)filesize * 100 - nowsendpart >= 5)
+        {
+            //use timer to get the system time
+            time(&rawtime);
+            timeinfo = localtime(&rawtime);
+
+            //print the transport % and system time
+            cout << (float)nowrecvsize / (float)filesize * 100 << "\% " << asctime(timeinfo);
+            nowsendpart = (float)nowrecvsize / (float)filesize * 100;
+        }
+
+        n = read(sockfd, recvbuffer, 1024);                                        //receiver file data
+        n = write(to, recvbuffer, sizeof(recvbuffer));                             //write data to the new file
+        n = write(sockfd, "i get a part of file", strlen("i get a part of file")); //send chech message to sender
+        nowrecvsize += 1024;
+    }
+
+    //after receive file , print the 100% and system time
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    cout << "100\% " << asctime(timeinfo);
+
+    //send check data to sender after file transport
+    n = write(sockfd, "i get the file", strlen("i get the file"));
+
     close(to);
     close(sockfd);
 }
 void tcp_send(char *ip, int port, char *filename)
 {
+    //tcp sender to wait receiver to ask
     int sockfd, newsockfd, portno;
     socklen_t clilen;
     struct sockaddr_in serv_addr, cli_addr;
-    int n;
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    bzero((char *)&serv_addr, sizeof(serv_addr));
+
+    portno = port;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0); //initial socket
     if (sockfd < 0)
         error("ERROR opening socket");
-    bzero((char *)&serv_addr, sizeof(serv_addr));
-    portno = port;
+
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = inet_addr(ip);
     serv_addr.sin_port = htons(portno);
+
     if (bind(sockfd, (struct sockaddr *)&serv_addr,
              sizeof(serv_addr)) < 0)
         error("ERROR on binding");
-    listen(sockfd, 5);
+    listen(sockfd, 5);                                  //listen to connect from tcp
     clilen = sizeof(cli_addr);
     newsockfd = accept(sockfd,
                        (struct sockaddr *)&cli_addr,
@@ -176,67 +217,75 @@ void tcp_send(char *ip, int port, char *filename)
     if (newsockfd < 0)
         error("ERROR on accept");
 
-    //receive buffer
+    //this array to receive data
     char recvbuffer[256];
     bzero(recvbuffer, 256);
 
-    //read data from receiver
-    n = read(newsockfd, recvbuffer, 255);
+    //this array to send file data
+    char sendbuffer[1024];
+    bzero(sendbuffer, 1024);
 
-    //open file
-    FILE *File = fopen(filename, "rb");
-
-    //get datasize
-    fseek(File, 0, SEEK_END);
-    int datasize = ftell(File);
-    fseek(File, 0, SEEK_SET);
-
-    //array to store file
-    char sendbuffer[datasize];
-    bzero(sendbuffer, datasize);
-    n = fread(sendbuffer, 1, datasize, File);
-    if (n <= 0)
-    {
-        printf("error read file\n");
-    }
-
-    //array to sastoreve data size
+    //this array to send file size
     char sizebuffer[128];
     bzero(sizebuffer, 128);
 
+    //this array to save file name
+    char namebuffer[128];
+    memset(namebuffer, 0, 128);
+    sprintf(namebuffer, "%s", filename); //store filename to local character array
+
+    int filesize;        //a integer to store the entire file size
+    int nowsendsize = 0; //a integer to store the sent file size
+
+    //open file whick want to send
+    FILE *File = fopen(filename, "rb");
+
+    //get filesize and store in a local integer
+    fseek(File, 0, SEEK_END);
+    filesize = ftell(File);
+    fseek(File, 0, SEEK_SET);
+
+    //read file name ask from receiver
+    int n = read(newsockfd, recvbuffer, 255);
+
+    //send file name to recevier
+    n = write(newsockfd, namebuffer, strlen(namebuffer));
+
+    //read check data from receiver after sending file name
+    n = read(newsockfd, recvbuffer, 255);
+
     //send data size to receiver
-    sprintf(sizebuffer, "%d", datasize);
+    sprintf(sizebuffer, "%d", filesize); //copy file size to sizebuffer
     n = write(newsockfd, sizebuffer, strlen(sizebuffer));
     if (n <= 0)
     {
-        printf("error send datasize\n");
+        printf("error send filesize\n");
     }
 
-    //read data from receiver
+    //read check data from receiver after sending file size
     n = read(newsockfd, recvbuffer, 255);
 
     //send file to receiver
-    n = write(newsockfd, sendbuffer, datasize);
+    while (fread(sendbuffer, 1, 1024, File) >= 0 && nowsendsize < filesize)
+    {
+        n = write(newsockfd, sendbuffer, 1024); //send the file data to receiver
+        n = read(newsockfd, recvbuffer, 255);   //receive the check data from receiver
+        nowsendsize += 1024;
+    }
 
-    //receive reply from receiver "i get the file"
+    //read check data from receiver after sending entire file
     n = read(newsockfd, recvbuffer, 255);
-    printf("TCP data transfer is over");
-    /*
-    bzero(buffer, 256);
-    
-    if (n < 0)
-        error("ERROR reading from socket");
-    printf("Here is the message: %s\n", buffer);
-    n = write(newsockfd, "I got your message", 18);
-    if (n < 0)
-        error("ERROR writing to socket");
-    */
-    fclose(File);
+
+    //TCP data transfer is over
+    printf("TCP data transfer is over\n");
+
+    fclose(File); //close file
     close(newsockfd);
     close(sockfd);
 }
 void udp_recv(char *ip, int port)
 {
+    //udp code given by TA
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
         ERR_EXIT("socket");
@@ -247,61 +296,92 @@ void udp_recv(char *ip, int port)
     servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(ip);
 
+    //timer initail
+    time_t rawtime;
+    struct tm *timeinfo;
+
+    //this array to save the file name
+    char namebuffer[128];
+    memset(namebuffer, 0, 128);
+
+    //this array to save the file size
+    char sizebuffer[256];
+    memset(sizebuffer, 0, 256);
+
+    //this array to receive the file data
+    char recvbuffer[1024];
+    memset(recvbuffer, 0, 1024);
+
+    //this array to store file name without directory name
+    char filename[128];
+    memset(filename, 0, 128);
+
+    int filesize;          //a integer to store the entire file size
+    int nowrecvsize = 0;   //a integer to store the received file size
+    float nowsendpart = 0; //a integer to store the sended % of file
+
+    //create output directory
+    mkdir("output", 0777);
+
+    //ask sender to send file name
+    sendto(sock, "give me the file name", strlen("give me the file name"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
+    //receive file name from sender
+    int n = recvfrom(sock, namebuffer, sizeof(namebuffer), 0, NULL, NULL);
+
     //ask sender to send file size
     sendto(sock, "give me the file size", strlen("give me the file size"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
     //receive the file size from sender
-    char sizebuffer[256];
-    memset(sizebuffer, 0, 256);
-    int n = recvfrom(sock, sizebuffer, sizeof(sizebuffer), 0, NULL, NULL);
-    int filesize = atoi(sizebuffer);
+    n = recvfrom(sock, sizebuffer, sizeof(sizebuffer), 0, NULL, NULL);
+    filesize = atoi(sizebuffer); //store file size to a local integer
 
     //ask sender to send file
     sendto(sock, "give me the file", strlen("give me the file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
-    //create the buffer to get file
-    char recvbuffer[filesize];
-    memset(recvbuffer, 0, filesize);
-    n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0, NULL, NULL);
-
-    //sent "i got the file" to sender
-    n = sendto(sock, "i got the file", strlen("i got the file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
-
     //create a new file to store
-    int to = creat("output.txt", 0777);
+    sprintf(filename, "output/%s", strrchr(namebuffer, '/') == nullptr ? namebuffer : strrchr(namebuffer, '/') + 1);
+    int to = creat(filename, 0777);
     if (to < 0)
     {
         cout << "Error creating destination file\n";
     }
-    n = write(to, recvbuffer, filesize); //write data to the new file
 
-    /*
-    int ret;
-    char sendbuf[1024] = {0};
-    char recvbuf[1024] = {0};
-    while (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL)
+    //receive file data
+    while (nowrecvsize < filesize) //received file size < entire file size, it means the transport not finish
     {
-
-        sendto(sock, sendbuf, strlen(sendbuf), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
-
-        
-        if (ret == -1)
+        //every 5 % send system time
+        if ((float)nowrecvsize / (float)filesize * 100 - nowsendpart >= 5)
         {
-            if (errno == EINTR)
-                continue;
-            ERR_EXIT("recvfrom");
+            //use timer to get system time
+            time(&rawtime);
+            timeinfo = localtime(&rawtime);
+
+            //print the transport % and system time
+            cout << (float)nowrecvsize / (float)filesize * 100 << "\% " << asctime(timeinfo);
+            nowsendpart = (float)nowrecvsize / (float)filesize * 100;
         }
 
-        fputs(recvbuf, stdout);
-        memset(sendbuf, 0, sizeof(sendbuf));
-        memset(recvbuf, 0, sizeof(recvbuf));
+        n = recvfrom(sock, recvbuffer, 1024, 0, NULL, NULL);                                                                         //receive file data
+        n = write(to, recvbuffer, sizeof(recvbuffer));                                                                               //write data to the new file
+        n = sendto(sock, "i get a part of file", strlen("i get a part of file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr)); //send check data to sender
+        nowrecvsize += 1024;
     }
-    */
+
+    //after receive file , print the 100% and system time
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    cout << "100\% " << asctime(timeinfo);
+
+    //send check data to sender after file transport
+    n = sendto(sock, "i got the file", strlen("i got the file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
     close(to);
     close(sock);
 }
 void udp_send(char *ip, int port, char *filename)
 {
+    //udp code given by TA
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
         ERR_EXIT("socket error");
@@ -315,78 +395,74 @@ void udp_send(char *ip, int port, char *filename)
     if (bind(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
         ERR_EXIT("bind error");
 
-    char recvbuf[1024] = {0};
-    char sizebuffer[256] = {0};
     struct sockaddr_in peeraddr;
     socklen_t peerlen;
-    int n;
+    peerlen = sizeof(peeraddr);
 
-    //open file
+    //this array to receive data
+    char recvbuffer[1024];
+    memset(recvbuffer, 0, sizeof(recvbuffer));
+
+    //this array to send file size
+    char sizebuffer[256] = {0};
+    memset(sizebuffer, 0, sizeof(sizebuffer));
+
+    //this array to send file data
+    char sendbuffer[1024];
+    memset(sendbuffer, 0, 1024);
+
+    //this array to send file name
+    char namebuffer[128];
+    memset(namebuffer, 0, 128);
+    sprintf(namebuffer, "%s", filename);
+
+    int filesize;        //a integer to store the entire file size
+    int nowsendsize = 0; //a integer to store the sent file size
+
+    //open file which want to send
     FILE *File = fopen(filename, "rb");
 
-    //get filesize
+    //get filesize and save into a local integer
     fseek(File, 0, SEEK_END);
-    int datasize = ftell(File);
+    filesize = ftell(File);
     fseek(File, 0, SEEK_SET);
-    //store filesize
-    memset(sizebuffer, 0, sizeof(sizebuffer));
-    sprintf(sizebuffer, "%d", datasize);
 
-    //read file to sendbuffer
-    char sendbuffer[datasize];
-    memset(sendbuffer, 0, datasize);
-    n = fread(sendbuffer, 1, datasize, File);
-    if (n <= 0)
-    {
-        printf("error read file\n");
-    }
+    //receive the file name ask from reciever
+    int n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0,
+                     (struct sockaddr *)&peeraddr, &peerlen);
 
-    peerlen = sizeof(peeraddr);
-    memset(recvbuf, 0, sizeof(recvbuf));
+    //send file name to receiver
+    n = sendto(sock, namebuffer, sizeof(namebuffer), 0,
+               (struct sockaddr *)&peeraddr, peerlen);
 
-    //receive the file ask from receiver
-    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+    //receive the file size ask from receiver
+    n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0,
                  (struct sockaddr *)&peeraddr, &peerlen);
 
     //send file size to receiver
+    sprintf(sizebuffer, "%d", filesize);
     n = sendto(sock, sizebuffer, sizeof(sizebuffer), 0,
                (struct sockaddr *)&peeraddr, peerlen);
-    printf("udp send filesize to receiver\n");
 
-    //receive the reply from receiver
-    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+    //receive the file ask from receiver
+    n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0,
                  (struct sockaddr *)&peeraddr, &peerlen);
 
-    //send file to receiver
-    n = sendto(sock, sendbuffer, sizeof(sendbuffer), 0,
-               (struct sockaddr *)&peeraddr, peerlen);
-    printf("udp send file to receiver\n");
+    //send file data
+    while (fread(sendbuffer, 1, 1024, File) >= 0 && nowsendsize < filesize)
+    {
+        n = sendto(sock, sendbuffer, 1024, 0,
+                   (struct sockaddr *)&peeraddr, peerlen); //send file data to receiver
+        n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0,
+                     (struct sockaddr *)&peeraddr, &peerlen); //receive check data from receiver
+        nowsendsize += 1024;
+    }
 
-    //receiver the reply from receiver
-    n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+    //receiver the reply from receiver after file transport
+    n = recvfrom(sock, recvbuffer, sizeof(recvbuffer), 0,
                  (struct sockaddr *)&peeraddr, &peerlen);
 
     printf("udp send file is over\n");
-    /*
-        n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
-                     (struct sockaddr *)&peeraddr, &peerlen);
-        if (n == -1)
-        {
-
-            if (errno == EINTR)
-                continue;
-
-            ERR_EXIT("recvfrom error");
-        }
-        else if (n > 0)
-        {
-
-            fputs(recvbuf, stdout);
-            sendto(sock, recvbuf, n, 0,
-                   (struct sockaddr *)&peeraddr, peerlen);
-        }
-        */
-
     fclose(File);
     close(sock);
 }
