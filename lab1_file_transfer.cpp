@@ -172,8 +172,11 @@ void tcp_recv(char *ip, int port)
             nowsendpart = (float)nowrecvsize / (float)filesize * 100;
         }
 
-        n = read(sockfd, recvbuffer, 1024);                                        //receiver file data
-        n = write(to, recvbuffer, sizeof(recvbuffer));                             //write data to the new file
+        n = read(sockfd, recvbuffer, 1024); //receiver file data
+        if (strcmp(strrchr(namebuffer, '.') + 1, "txt") != 0)
+            n = write(to, recvbuffer, sizeof(recvbuffer)); //write data to the new file
+        else
+            n = write(to, recvbuffer, strlen(recvbuffer));
         n = write(sockfd, "i get a part of file", strlen("i get a part of file")); //send chech message to sender
         nowrecvsize += 1024;
     }
@@ -209,7 +212,7 @@ void tcp_send(char *ip, int port, char *filename)
     if (bind(sockfd, (struct sockaddr *)&serv_addr,
              sizeof(serv_addr)) < 0)
         error("ERROR on binding");
-    listen(sockfd, 5);                                  //listen to connect from tcp
+    listen(sockfd, 5); //listen to connect from tcp
     clilen = sizeof(cli_addr);
     newsockfd = accept(sockfd,
                        (struct sockaddr *)&cli_addr,
@@ -362,8 +365,11 @@ void udp_recv(char *ip, int port)
             nowsendpart = (float)nowrecvsize / (float)filesize * 100;
         }
 
-        n = recvfrom(sock, recvbuffer, 1024, 0, NULL, NULL);                                                                         //receive file data
-        n = write(to, recvbuffer, sizeof(recvbuffer));                                                                               //write data to the new file
+        n = recvfrom(sock, recvbuffer, 1024, 0, NULL, NULL);
+        if (strcmp(strrchr(namebuffer, '.') + 1, "txt") != 0) //receive file data
+            n = write(to, recvbuffer, sizeof(recvbuffer));
+        else                                                                                                                         //txt condition
+            n = write(to, recvbuffer, strlen(recvbuffer));                                                                           //write data to the new file
         n = sendto(sock, "i get a part of file", strlen("i get a part of file"), 0, (struct sockaddr *)&servaddr, sizeof(servaddr)); //send check data to sender
         nowrecvsize += 1024;
     }
